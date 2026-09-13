@@ -33,6 +33,15 @@ def headers():
 
 @st.cache_data(ttl=15, show_spinner=False)
 def fetch_data():
+    """
+    GET {N8N_BASE_URL}/webhook/gauti-duomenis
+    Tikimasi n8n Webhook (GET), kuris perziurai.xlsx paverčia JSON ir
+    grąžina per "Respond to Webhook" mazgą. Turinys — visų eilučių
+    sąrašas (įskaitant "VISO:" eilutę), pvz.:
+        [{"klientas": "...", "sutarties_nr": "...", "objektas": "...",
+          "suma_be_pvm": 123.45, "suma_su_pvm": 149.37,
+          "busena": "Laukia", "saltinio_failas": "...", ...}, ...]
+    """
     resp = requests.get(
         f"{N8N_BASE_URL}/webhook/gauti-duomenis", headers=headers(), timeout=REQUEST_TIMEOUT
     )
@@ -53,6 +62,12 @@ def clean_numeric_columns(dataframe: pd.DataFrame) -> pd.DataFrame:
 
 
 def post_status_updates(rows: list[dict]):
+    """
+    POST {N8N_BASE_URL}/webhook/atnaujinti-busena
+    Body: {"updates": [{"saltinio_failas": "...", "busena": "Patvirtinta"}, ...]}
+    n8n pusėje: pagal saltinio_failas surasti atitinkamą eilutę
+    perziurai.xlsx faile ir perrašyti busena stulpelį.
+    """
     resp = requests.post(
         f"{N8N_BASE_URL}/webhook/atnaujinti-busena",
         headers=headers(),
@@ -63,10 +78,88 @@ def post_status_updates(rows: list[dict]):
 
 
 def to_excel_bytes(dataframe: pd.DataFrame) -> bytes:
-    """Konvertuoja DataFrame į .xlsx baitus, tinkamus st.download_button."""
+    """
+    Konvertuoja DataFrame į .xlsx baitus su TARPINĖMIS SUMOMIS (subtotal):
+
+    - eilutės sugrupuojamos pagal stulpelį "klientas";
+    - po kiekvieno kliento eilučių įterpiama tarpinės sumos eilutė su
+      tikra Excel formule =SUBTOTAL(9; ...) stulpeliams suma_be_pvm ir
+      suma_su_pvm;
+    - kliento eilutės paslepiamos į grupę (outline), kairėje Excel pusėje
+      atsiranda [+]/[-] mygtukai joms suskleisti/išskleisti;
+    - apačioje bendra suma (VISO:), taip pat kaip =SUBTOTAL(9; ...) formulė
+      per visą lentelę — SUBTOTAL funkcija automatiškai ignoruoja kitas
+      SUBTOTAL eilutes, todėl bendra suma neduosis dvigubai.
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    from openpyxl.utils import get_column_letter
+
+    df = dataframe.copy()
+    if "klientas" in df.columns:
+        df = df[df["klientas"] != "VISO:"].copy()
+        df = df.sort_values("klientas", kind="stable").reset_index(drop=True)
+
+    columns = list(df.columns)
+    subtotal_cols = [c for c in ("suma_be_pvm", "suma_su_pvm") if c in columns]
+    can_group = "klientas" in columns and subtotal_cols
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Suvestine"
+    bold = Font(bold=True)
+
+    ws.append(columns)
+    for cell in ws[1]:
+        cell.font = bold
+
+    current_row = 2
+
+    if can_group:
+        klientas_idx = columns.index("klientas")
+        for klientas, group in df.groupby("klientas", sort=False):
+            group_start = current_row
+            for _, row in group.iterrows():
+                ws.append([row[c] for c in columns])
+                ws.row_dimensions[current_row].outline_level = 1
+                current_row += 1
+            group_end = current_row - 1
+
+            subtotal_row = ["" for _ in columns]
+            subtotal_row[klientas_idx] = f"Tarpinė suma: {klientas}"
+            ws.append(subtotal_row)
+            for c in subtotal_cols:
+                col_idx = columns.index(c) + 1
+                col_letter = get_column_letter(col_idx)
+                cell = ws.cell(row=current_row, column=col_idx)
+                cell.value = f"=SUBTOTAL(9,{col_letter}{group_start}:{col_letter}{group_end})"
+            for cell in ws[current_row]:
+                cell.font = bold
+            current_row += 1
+
+        grand_total_end = current_row - 1
+        grand_row = ["" for _ in columns]
+        grand_row[klientas_idx] = "VISO:"
+        ws.append(grand_row)
+        for c in subtotal_cols:
+            col_idx = columns.index(c) + 1
+            col_letter = get_column_letter(col_idx)
+            cell = ws.cell(row=current_row, column=col_idx)
+            cell.value = f"=SUBTOTAL(9,{col_letter}2:{col_letter}{grand_total_end})"
+        for cell in ws[current_row]:
+            cell.font = bold
+    else:
+        for _, row in df.iterrows():
+            ws.append([row[c] for c in columns])
+
+    ws.sheet_properties.outlinePr.summaryBelow = True
+
+    for col_idx, col_name in enumerate(columns, start=1):
+        max_len = max([len(str(col_name))] + [len(str(v)) for v in df[col_name].astype(str).tolist()]) if len(df) else len(str(col_name))
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 2, 40)
+
     output = BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        dataframe.to_excel(writer, index=False, sheet_name="Suvestine")
+    wb.save(output)
     return output.getvalue()
 
 
