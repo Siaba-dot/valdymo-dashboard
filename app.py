@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 from datetime import datetime
+from urllib.parse import quote
 
 # ============================================================
 # NUSTATYMAI
@@ -30,15 +31,6 @@ def headers():
 
 @st.cache_data(ttl=15, show_spinner=False)
 def fetch_data():
-    """
-    GET {N8N_BASE_URL}/webhook/gauti-duomenis
-    Tikimasi n8n Webhook (GET), kuris perziurai.xlsx paverčia JSON ir
-    grąžina per "Respond to Webhook" mazgą. Turinys — visų eilučių
-    sąrašas (įskaitant "VISO:" eilutę), pvz.:
-        [{"klientas": "...", "sutarties_nr": "...", "objektas": "...",
-          "suma_be_pvm": 123.45, "suma_su_pvm": 149.37,
-          "busena": "Laukia", "saltinio_failas": "...", ...}, ...]
-    """
     resp = requests.get(
         f"{N8N_BASE_URL}/webhook/gauti-duomenis", headers=headers(), timeout=REQUEST_TIMEOUT
     )
@@ -47,12 +39,6 @@ def fetch_data():
 
 
 def post_status_updates(rows: list[dict]):
-    """
-    POST {N8N_BASE_URL}/webhook/atnaujinti-busena
-    Body: {"updates": [{"saltinio_failas": "...", "busena": "Patvirtinta"}, ...]}
-    n8n pusėje: pagal saltinio_failas surasti atitinkamą eilutę
-    perziurai.xlsx faile ir perrašyti busena stulpelį.
-    """
     resp = requests.post(
         f"{N8N_BASE_URL}/webhook/atnaujinti-busena",
         headers=headers(),
@@ -76,9 +62,6 @@ with tab1:
         "Šis mygtukas leidžia paleisti apdorojimą iškart, nelaukiant."
     )
     if st.button("▶️ Apdoroti dabar", type="primary"):
-        # POST {N8N_BASE_URL}/webhook/apdoroti-dabar
-        # Webhook mazge "Respond" = Immediately, kad mygtukas nekabėtų
-        # laukdamas, kol AI apdoros visus failus.
         with st.spinner("Siunčiama komanda į n8n..."):
             try:
                 resp = requests.post(
@@ -104,16 +87,11 @@ with tab2:
     uploaded = st.file_uploader("Pasirink failą", type=["pdf", "docx", "doc"])
     if uploaded is not None:
         if st.button("⬆️ Įkelti į apdorojimo eilę"):
-            # POST {N8N_BASE_URL}/webhook/ikelti-faila
-            # Siunčiama kaip GRYNI dvejetainiai duomenys (raw body),
-            # NE multipart/form-data — n8n Webhook mazge "Raw Body" = true,
-            # "Field Name for Binary Data" = "data". Failo pavadinimas
-            # perduodamas per X-Filename antraštę.
             with st.spinner("Keliama..."):
                 try:
                     upload_headers = dict(headers())
                     upload_headers["Content-Type"] = "application/octet-stream"
-                    upload_headers["X-Filename"] = uploaded.name
+                    upload_headers["X-Filename"] = quote(uploaded.name)
                     resp = requests.post(
                         f"{N8N_BASE_URL}/webhook/ikelti-faila",
                         headers=upload_headers,
