@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 from datetime import datetime
 from urllib.parse import quote
+from io import BytesIO
 
 # ============================================================
 # NUSTATYMAI
@@ -46,6 +47,14 @@ def post_status_updates(rows: list[dict]):
         timeout=REQUEST_TIMEOUT,
     )
     resp.raise_for_status()
+
+
+def to_excel_bytes(dataframe: pd.DataFrame) -> bytes:
+    """Konvertuoja DataFrame į .xlsx baitus, tinkamus st.download_button."""
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        dataframe.to_excel(writer, index=False, sheet_name="Suvestine")
+    return output.getvalue()
 
 
 tab1, tab2, tab3, tab4 = st.tabs(
@@ -199,8 +208,18 @@ with tab4:
             st.metric("Bendra suma (su PVM)", f"{float(viso_row.iloc[0]['suma_su_pvm']):.2f} €")
 
         st.caption(f"Atnaujinta: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        if st.button("🔄 Atnaujinti"):
-            fetch_data.clear()
-            st.rerun()
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("🔄 Atnaujinti"):
+                fetch_data.clear()
+                st.rerun()
+        with col_b:
+            st.download_button(
+                label="⬇️ Atsisiųsti Excel failą",
+                data=to_excel_bytes(df),
+                file_name=f"sumu_suvestine_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
     elif df is not None:
         st.warning("Dar nėra duomenų.")
