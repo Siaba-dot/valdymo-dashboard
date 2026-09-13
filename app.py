@@ -13,6 +13,7 @@ N8N_API_KEY = st.secrets.get("N8N_API_KEY", "")
 
 ALLOWED_STATUSES = ["Laukia", "Patvirtinta"]
 REQUEST_TIMEOUT = 20
+NUMERIC_COLUMNS = ["kiekis", "periodiskumas", "ikainis", "suma_be_pvm", "suma_su_pvm"]
 # ============================================================
 
 st.set_page_config(page_title="Sumų suvestinė", page_icon="📊", layout="wide")
@@ -36,7 +37,19 @@ def fetch_data():
         f"{N8N_BASE_URL}/webhook/gauti-duomenis", headers=headers(), timeout=REQUEST_TIMEOUT
     )
     resp.raise_for_status()
-    return pd.DataFrame(resp.json())
+    df = pd.DataFrame(resp.json())
+    return clean_numeric_columns(df)
+
+
+def clean_numeric_columns(dataframe: pd.DataFrame) -> pd.DataFrame:
+    """Priverstinai konvertuoja žinomus skaitinius stulpelius į skaičius,
+    nes n8n juos grąžina kaip tekstą, o Excel eksportas tada rašo juos
+    kaip tekstines, ne skaitines, celes."""
+    df = dataframe.copy()
+    for col in NUMERIC_COLUMNS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
 
 
 def post_status_updates(rows: list[dict]):
