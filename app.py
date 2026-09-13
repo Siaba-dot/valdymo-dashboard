@@ -105,28 +105,33 @@ with tab2:
     if uploaded is not None:
         if st.button("⬆️ Įkelti į apdorojimo eilę"):
             # POST {N8N_BASE_URL}/webhook/ikelti-faila
-            # Webhook mazge: Binary Data = true, laukiamas laukas "data".
-            # n8n turi patikrinti, ar failas su tokiu pavadinimu jau yra
-            # sekamame aplanke arba "apdoroti" aplanke, ir grąžinti JSON:
-            #   {"status": "ok"} arba {"status": "exists"}
+            # Siunčiama kaip GRYNI dvejetainiai duomenys (raw body),
+            # NE multipart/form-data — n8n Webhook mazge "Raw Body" = true,
+            # "Field Name for Binary Data" = "data". Failo pavadinimas
+            # perduodamas per X-Filename antraštę.
             with st.spinner("Keliama..."):
                 try:
-                    files = {"data": (uploaded.name, uploaded.getvalue())}
+                    upload_headers = dict(headers())
+                    upload_headers["Content-Type"] = "application/octet-stream"
+                    upload_headers["X-Filename"] = uploaded.name
                     resp = requests.post(
                         f"{N8N_BASE_URL}/webhook/ikelti-faila",
-                        headers=headers(),
-                        files=files,
+                        headers=upload_headers,
+                        data=uploaded.getvalue(),
                         timeout=60,
                     )
                     resp.raise_for_status()
                     result = resp.json()
-                    if result.get("status") == "exists":
+                    status = result.get("status")
+                    if status == "exists":
                         st.warning(f"„{uploaded.name}“ jau yra aplanke arba jau apdorotas anksčiau.")
-                    else:
+                    elif status == "ok":
                         st.success(
                             f"„{uploaded.name}“ įkeltas. Bus apdorotas per artimiausius 10 min "
                             f"(arba paspausk „Apdoroti dabar“ skiltyje „Paleidimas“)."
                         )
+                    else:
+                        st.error(f"n8n grąžino netikėtą atsakymą: {result}")
                 except requests.exceptions.RequestException as e:
                     st.error(f"Nepavyko įkelti failo. Klaida: {e}")
 
